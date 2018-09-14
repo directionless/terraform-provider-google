@@ -3,6 +3,7 @@ package google
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform/helper/resource"
@@ -68,6 +69,27 @@ func (w *ContainerBetaOperationWaiter) RefreshFunc() resource.StateRefreshFunc {
 		if err != nil {
 			return nil, "", err
 		}
+
+		// Workaround a bug -- Google seems to have a moment after the
+		// node pool is created, where the apiserver is wedged and failing
+		// healthchecks. This is returned to us as an error. However,
+		// there's very little we can do. As the API server restarts
+		// itself, we can detect and mask this condition. (Of course, this
+		// is mostly a workaround until some GKE issue is fixed).
+		//
+		// Since google will restart this, we can suppress it and let the
+		// timeout handle real errors.
+		//
+		// See Also:
+		// https://github.com/terraform-providers/terraform-provider-google/issues/2022
+		// Google Case 16922604
+		if resp.StatusMessage != "" {
+			if strings.Contains(resp.StatusMessage, `component "kube-apiserver"`) && strings.Contains(resp.StatusMessage, "is unhealthy") {
+				log.Printf("[INFO] Suppressing kube-apiserver error on operations %q", w.Op.Name)
+				resp.StatusMessage = ""
+			}
+		}
+		// End Workaround
 
 		if resp.StatusMessage != "" {
 			return resp, resp.Status, fmt.Errorf(resp.StatusMessage)
